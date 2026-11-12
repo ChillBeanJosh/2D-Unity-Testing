@@ -323,9 +323,10 @@ public class PlayerMovement2D : MonoBehaviour
         Vector2 direction = velocity.normalized;
         float distance = velocity.magnitude + skinWidth;
 
+        //Player Collider:
         RaycastHit2D hit = Physics2D.CircleCast(position, collisionRadius, direction, distance, collisionLayers);
 
-        // If stuck directly inside a collider, push out immediately along inverse normal or Up
+        //Push away from normal if inside:
         if (hit.collider != null)
         {
             _collisionDebugHits.Add(new CollisionDebugHit2D(hit.point, hit.normal));
@@ -355,7 +356,7 @@ public class PlayerMovement2D : MonoBehaviour
         }
         else
         {
-            // Cubic Spline Corner/Steep Slope Safe Slide:
+            //Cubic Spline Corner/Steep Slope Safe Slide:
             Vector2 tangent = new Vector2(-hit.normal.y, hit.normal.x);
             float dotTangent = Vector2.Dot(leftOver.normalized, tangent);
 
