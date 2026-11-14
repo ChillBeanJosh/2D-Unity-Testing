@@ -40,8 +40,13 @@ public class PlayerMovement2D : MonoBehaviour
 
     [Header("-------------------------------------------------------")]
     [Header("Impulse Settings:")]
+
     [SerializeField] private float jumpStrength = 12f;
+    [SerializeField] private float wallJumpStrength = 12f;
+    [Space]
     [SerializeField] private float dashStrength = 15f;
+    private Vector2 jumpSurfaceNormal = Vector2.up;
+    private bool hasJumpSurface;
 
     [Header("-------------------------------------------------------")]
     [Header("Spline Riding Settings:")]
@@ -314,14 +319,16 @@ public class PlayerMovement2D : MonoBehaviour
         if (_requestedImpulse)
         {
             if (isSideScroller)
-            {
+            { 
+                //GROUND JUMP HAS PRIORITY:
                 if (isGrounded)
                 {
-                    currentVelocity.y = 0f;
-
-                    AddImpulse(Vector2.up * jumpStrength);
-
-                    isGrounded = false;
+                    ApplySurfaceJump(groundNormal);
+                }
+                //WALL JUMP:
+                else if (hasJumpSurface)
+                {
+                    ApplySurfaceJump(jumpSurfaceNormal);
                 }
             }
             else
@@ -412,6 +419,8 @@ public class PlayerMovement2D : MonoBehaviour
         //Push away from normal if inside:
         if (hit.collider != null)
         {
+            //Register Surface For Jump Detection:
+            RegisterJumpSurface(hit);
             _collisionDebugHits.Add(new CollisionDebugHit2D(hit.point, hit.normal));
 
             if (hit.distance <= 0f)
@@ -431,6 +440,8 @@ public class PlayerMovement2D : MonoBehaviour
         float angle = Vector2.Angle(Vector2.up, hit.normal);
         if (angle <= maxSlopeAngle)
         {
+            //GROUNDED SURFACE / FLOOR COLLISION:
+
             isGrounded = true;
             groundNormal = hit.normal;
 
@@ -439,17 +450,34 @@ public class PlayerMovement2D : MonoBehaviour
         }
         else
         {
-            //Cubic Spline Corner/Steep Slope Safe Slide:
-            Vector2 tangent = new Vector2(-hit.normal.y, hit.normal.x);
-            float dotTangent = Vector2.Dot(leftOver.normalized, tangent);
+            //STEPPED SURFACE / WALL COLLISION:
 
-            if (Mathf.Abs(dotTangent) > 0.001f)
+            if (isSideScroller)
             {
-                leftOver = tangent * (leftOver.magnitude * Mathf.Sign(dotTangent));
+                //1.) Project Remaining Movement Along Surface:
+                leftOver = ProjectAndScale(leftOver, hit.normal);
+
+                //2.) Prevent Upward Wall Climbing:
+                if (leftOver.y > 0f)
+                {
+                    leftOver.y = 0f;
+                }
             }
             else
             {
-                leftOver = ProjectAndScale(leftOver, hit.normal);
+                //Existing Top-Down Steep Surface Sliding:
+                Vector2 tangent = new Vector2(-hit.normal.y, hit.normal.x);
+
+                float dotTangent = Vector2.Dot(leftOver.normalized, tangent);
+
+                if (Mathf.Abs(dotTangent) > 0.001f)
+                {
+                    leftOver = tangent * (leftOver.magnitude * Mathf.Sign(dotTangent));
+                }
+                else
+                {
+                    leftOver = ProjectAndScale(leftOver, hit.normal);
+                }
             }
         }
 
@@ -700,7 +728,7 @@ public class PlayerMovement2D : MonoBehaviour
     #endregion
     #endregion
 
-    #region Spring Box
+    #region External Forces
     private void ApplyBoundingBoxForces()
     {
         if (!useBoundingBox) return;
@@ -733,6 +761,63 @@ public class PlayerMovement2D : MonoBehaviour
 
         //Apply Force to Player, using distance from bounding box edges to calculate spring force:
         if (boxForce.sqrMagnitude > Epsilon) AddForce(boxForce);
+    }
+
+    private void RegisterJumpSurface(RaycastHit2D hit)
+    {
+        if (hit.collider == null)
+            return;
+
+        //Calculate Surface Angle:
+        float surfaceAngle = Vector2.Angle(
+            Vector2.up,
+            hit.normal
+        );
+
+        //Only Register Non-Walkable Surfaces:
+        if (surfaceAngle <= maxSlopeAngle)
+            return;
+
+        jumpSurfaceNormal = hit.normal.normalized;
+        hasJumpSurface = true;
+    }
+
+    private void ApplySurfaceJump(Vector2 surfaceNormal)
+    {
+        //1.) Get Direction Away From Surface:
+        Vector2 jumpDirection = surfaceNormal.normalized;
+
+
+        //2.) Remove Velocity Into Surface:
+        float velocityIntoSurface = Vector2.Dot(currentVelocity, jumpDirection);
+
+        if (velocityIntoSurface < 0f)
+        {
+            currentVelocity -= jumpDirection * velocityIntoSurface;
+        }
+
+
+        //3.) Apply Jump Velocity:
+        if (isGrounded)
+        {
+            //GROUND JUMP:
+            //Apply upward velocity (or ground normal on slopes).
+            currentVelocity += jumpDirection * jumpStrength;
+        }
+        else
+        {
+            //WALL JUMP:
+            //Combine upward velocity with outward wall direction.
+
+            Vector2 wallJumpVelocity = Vector2.up * jumpStrength + jumpDirection * wallJumpStrength;
+
+            currentVelocity += wallJumpVelocity;
+        }
+
+
+        //4.) Reset Surface States:
+        isGrounded = false;
+        hasJumpSurface = false;
     }
 
     #endregion
