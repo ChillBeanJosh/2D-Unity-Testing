@@ -27,6 +27,7 @@ public class PlayerMovement2D : MonoBehaviour
     private Vector2 currentPosition;
     private Vector2 currentVelocity;
     private Vector2 totalAcceleration;
+    private Vector2 pendingExternalAcceleration;
 
     [Header("-------------------------------------------------------")]
     [Header("Physics Settings:")]
@@ -35,6 +36,7 @@ public class PlayerMovement2D : MonoBehaviour
     [SerializeField] private float gravity = 9.8f;
     [Space]
     [SerializeField] private float dragCoefficient = 8f;
+    private float currentDragCoefficient;
     [Space]
     [SerializeField] private float meshRotationSpeed = 10f;
 
@@ -43,10 +45,15 @@ public class PlayerMovement2D : MonoBehaviour
 
     [SerializeField] private float jumpStrength = 12f;
     [SerializeField] private float wallJumpStrength = 12f;
-    [Space]
-    [SerializeField] private float dashStrength = 15f;
+    [SerializeField] private float jumpBufferDuration = 0.15f;
+    [SerializeField] private float coyoteTimeDuration = 0.12f;
+
     private Vector2 jumpSurfaceNormal = Vector2.up;
     private bool hasJumpSurface;
+    private float jumpBufferTimer;
+    private float coyoteTimeTimer;
+    [Space]
+    [SerializeField] private float dashStrength = 15f;
 
     [Header("-------------------------------------------------------")]
     [Header("Spline Riding Settings:")]
@@ -132,6 +139,9 @@ public class PlayerMovement2D : MonoBehaviour
         //Initialize Position Data:
         currentPosition = transform.position;
         previousPosition = currentPosition;
+
+        //Initialize Default Drag Coefficient:
+        currentDragCoefficient = dragCoefficient;
     }
 
     #region Update Read
@@ -198,7 +208,7 @@ public class PlayerMovement2D : MonoBehaviour
     //2.) Add Mass Based Acceleration to Accumulator:
     public void AddForce(Vector2 force)
     {
-        AddAcceleration(force / mass);
+        pendingExternalAcceleration += force / mass;
     }
 
     //3.) Add Stronger (Velocity) Force after Accumulator:
@@ -206,13 +216,22 @@ public class PlayerMovement2D : MonoBehaviour
     {
         currentVelocity += impulse / mass;
     }
+
+    public void AddExternalAcceleration(Vector2 acceleration)
+    {
+        pendingExternalAcceleration += acceleration;
+    }
     #endregion
 
     #region Constant Physics
     public void GatherIntrinsicAccelerations(float moveAcceleration)
     {
-        _activeAccelerations.Clear();
         totalAcceleration = Vector2.zero;
+        _activeAccelerations.Clear();
+
+        // Apply Pending External Accelerations:
+        AddAcceleration(pendingExternalAcceleration);
+        pendingExternalAcceleration = Vector2.zero;
 
 
         //SPLINE RIDING PHYSICS:
@@ -255,7 +274,7 @@ public class PlayerMovement2D : MonoBehaviour
         }
 
         //2.) Apply Drag/Friction:
-        Vector2 dragAcceleration = -currentVelocity * dragCoefficient;
+        Vector2 dragAcceleration = -currentVelocity * currentDragCoefficient;
 
         AddAcceleration(dragAcceleration);
 
@@ -280,6 +299,8 @@ public class PlayerMovement2D : MonoBehaviour
 
     public void GatherIntrinsicPhysics()
     {
+        bool bufferRefreshedThisFrame = false;
+
         //1.) Process Spline Input:
         if (_requestedSplineRide)
         {
@@ -304,7 +325,6 @@ public class PlayerMovement2D : MonoBehaviour
             {
                 StopSplineRide();
 
-                //Consume Input:
                 _requestedImpulse = false;
             }
 
@@ -312,28 +332,41 @@ public class PlayerMovement2D : MonoBehaviour
         }
 
 
-        //EXISTING PHYSICS:
-
+        //3.) Existing Physics:
         ApplyBoundingBoxForces();
 
+
+        //4.) Update Coyote Timer:
+        //Refresh while grounded, otherwise count down.
+
+        if (isGrounded)
+        {
+            coyoteTimeTimer = coyoteTimeDuration;
+        }
+        else
+        {
+            coyoteTimeTimer = Mathf.Max(
+                0f,
+                coyoteTimeTimer - Time.fixedDeltaTime
+            );
+        }
+
+
+        //5.) Process Jump / Dash Input:
         if (_requestedImpulse)
         {
             if (isSideScroller)
-            { 
-                //GROUND JUMP HAS PRIORITY:
-                if (isGrounded)
-                {
-                    ApplySurfaceJump(groundNormal);
-                }
-                //WALL JUMP:
-                else if (hasJumpSurface)
-                {
-                    ApplySurfaceJump(jumpSurfaceNormal);
-                }
+            {
+                //Refresh Jump Buffer:
+                jumpBufferTimer = jumpBufferDuration;
+
+                bufferRefreshedThisFrame = true;
             }
             else
             {
-                Vector2 dashDirection = _requestedMovement.sqrMagnitude > Epsilon
+                //Existing Top-Down Dash:
+                Vector2 dashDirection =
+                    _requestedMovement.sqrMagnitude > Epsilon
                     ? _requestedMovement.normalized
                     : currentVelocity.normalized;
 
@@ -341,6 +374,45 @@ public class PlayerMovement2D : MonoBehaviour
             }
 
             _requestedImpulse = false;
+        }
+
+
+        //6.) Process Buffered Jump:
+        if (isSideScroller && jumpBufferTimer > 0f)
+        {
+            bool jumped = false;
+
+
+            //GROUND JUMP / COYOTE TIME HAS PRIORITY:
+            if (isGrounded || coyoteTimeTimer > 0f)
+            {
+                ApplySurfaceJump(groundNormal, true);
+
+                jumped = true;
+            }
+
+
+            //WALL JUMP:
+            else if (hasJumpSurface)
+            {
+                ApplySurfaceJump(jumpSurfaceNormal, false);
+
+                jumped = true;
+            }
+
+
+            //7.) Consume Jump Buffer:
+            if (jumped)
+            {
+                jumpBufferTimer = 0f;
+            }
+            else if (!bufferRefreshedThisFrame)
+            {
+                jumpBufferTimer = Mathf.Max(
+                    0f,
+                    jumpBufferTimer - Time.fixedDeltaTime
+                );
+            }
         }
     }
 
@@ -502,19 +574,43 @@ public class PlayerMovement2D : MonoBehaviour
     private void UpdateGroundedState()
     {
         isGrounded = false;
-        groundNormal = Vector2.up;
 
-        float castRadius = Mathf.Max(0.001f, collisionRadius - skinWidth);
-        float castDistance = groundCheckDistance + skinWidth + 0.05f;
+        //Default to normal drag:
+        currentDragCoefficient = dragCoefficient;
 
-        RaycastHit2D hit = Physics2D.CircleCast(currentPosition, castRadius, Vector2.down, castDistance, collisionLayers);
-        if (hit.collider == null) return;
+        float castRadius = Mathf.Max(
+            0.001f,
+            collisionRadius - skinWidth
+        );
+
+        float castDistance =
+            groundCheckDistance + skinWidth + 0.05f;
+
+        RaycastHit2D hit = Physics2D.CircleCast(
+            currentPosition,
+            castRadius,
+            Vector2.down,
+            castDistance,
+            collisionLayers
+        );
+
+        if (hit.collider == null)
+            return;
 
         float angle = Vector2.Angle(Vector2.up, hit.normal);
+
         if (angle <= maxSlopeAngle)
         {
             isGrounded = true;
             groundNormal = hit.normal;
+
+            //Check for Custom Surface Properties:
+            FrictionSurface2D surface = hit.collider.GetComponentInParent<FrictionSurface2D>();
+
+            if (surface != null)
+            {
+                currentDragCoefficient = surface.DragCoefficient;
+            }
         }
     }
     #endregion
@@ -765,24 +861,19 @@ public class PlayerMovement2D : MonoBehaviour
 
     private void RegisterJumpSurface(RaycastHit2D hit)
     {
-        if (hit.collider == null)
-            return;
+        if (hit.collider == null) return;
 
         //Calculate Surface Angle:
-        float surfaceAngle = Vector2.Angle(
-            Vector2.up,
-            hit.normal
-        );
+        float surfaceAngle = Vector2.Angle(Vector2.up, hit.normal);
 
         //Only Register Non-Walkable Surfaces:
-        if (surfaceAngle <= maxSlopeAngle)
-            return;
+        if (surfaceAngle <= maxSlopeAngle) return;
 
         jumpSurfaceNormal = hit.normal.normalized;
         hasJumpSurface = true;
     }
 
-    private void ApplySurfaceJump(Vector2 surfaceNormal)
+    private void ApplySurfaceJump(Vector2 surfaceNormal, bool isGroundJump)
     {
         //1.) Get Direction Away From Surface:
         Vector2 jumpDirection = surfaceNormal.normalized;
@@ -798,19 +889,18 @@ public class PlayerMovement2D : MonoBehaviour
 
 
         //3.) Apply Jump Velocity:
-        if (isGrounded)
+        if (isGroundJump)
         {
             //GROUND JUMP:
-            //Apply upward velocity (or ground normal on slopes).
             currentVelocity += jumpDirection * jumpStrength;
+
+            //Consume Coyote Time:
+            coyoteTimeTimer = 0f;
         }
         else
         {
             //WALL JUMP:
-            //Combine upward velocity with outward wall direction.
-
             Vector2 wallJumpVelocity = Vector2.up * jumpStrength + jumpDirection * wallJumpStrength;
-
             currentVelocity += wallJumpVelocity;
         }
 
@@ -829,6 +919,13 @@ public class PlayerMovement2D : MonoBehaviour
     public Vector2 GetTotalAcceleration() => totalAcceleration;
     public Vector2 GetCurrentVelocity() => currentVelocity;
     public Vector2 GetCurrentPosition() => currentPosition;
+
+    public float GetDragCoefficient() => dragCoefficient;
+    public void SetDragCoefficient(float newDrag)
+    {
+        dragCoefficient = Mathf.Max(0f, newDrag);
+    }
+
 
     public bool GetGroundedStatus() => isGrounded;
     public void SetSideScroller(bool toggled)

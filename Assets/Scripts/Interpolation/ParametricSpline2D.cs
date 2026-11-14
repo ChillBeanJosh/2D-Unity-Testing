@@ -32,6 +32,9 @@ public class ParametricSpline2D : MonoBehaviour
     [Header("Computed Functions: ")]
     public List<SplineSegment2D> functions = new List<SplineSegment2D>();
 
+    [Header("Spline Rendering:")]
+    [SerializeField] private LineRenderer splineRenderer;
+
     [Header("Visualization: ")]
     public bool drawGizmos = true;
     [Range(10, 100)] public int resolution = 50;
@@ -63,6 +66,11 @@ public class ParametricSpline2D : MonoBehaviour
             //Recalculate Spline:
             CalculateSpline();
         }
+    }
+
+    private void Start()
+    {
+        RefreshLineRenderer();
     }
 
     public void CalculateSpline()
@@ -652,6 +660,49 @@ public class ParametricSpline2D : MonoBehaviour
         }
 
         return closestDistance;
+    }
+
+    public void RefreshLineRenderer()
+    {
+        if (splineRenderer == null || functions == null || functions.Count == 0)
+            return;
+
+        int steps = Mathf.Max(1, resolution);
+
+        // Each function contributes 'steps' line segments.
+        int totalPoints = functions.Count * steps + 1;
+
+        splineRenderer.positionCount = totalPoints;
+        splineRenderer.useWorldSpace = true;
+
+        int pointIndex = 0;
+
+        // Set the initial point of the spline.
+        Vector2 startPoint = Evaluate(functions[0].tStart);
+
+        splineRenderer.SetPosition(
+            pointIndex++,
+            new Vector3(startPoint.x, startPoint.y, 0f)
+        );
+
+        // Sample the remaining points across every function.
+        for (int i = 0; i < functions.Count; i++)
+        {
+            float tStart = functions[i].tStart;
+            float tEnd = functions[i].tEnd;
+
+            for (int j = 1; j <= steps; j++)
+            {
+                float t = Mathf.Lerp(tStart, tEnd, j / (float)steps);
+
+                Vector2 point = Evaluate(t);
+
+                splineRenderer.SetPosition(
+                    pointIndex++,
+                    new Vector3(point.x, point.y, 0f)
+                );
+            }
+        }
     }
 
     private void OnDrawGizmos()
