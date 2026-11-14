@@ -46,6 +46,15 @@ public class ParametricSpline2D : MonoBehaviour
     public Color velocityColor;
     public Color accelerationColor;
 
+    [Header("Arc Length: ")]
+    [SerializeField, Min(2)]
+    private int arcSamplesPerSegment = 40;
+
+    private readonly List<float> _arcTValues = new List<float>();
+    private readonly List<float> _arcDistances = new List<float>();
+
+    public float TotalLength { get; private set; }
+
     private void OnValidate()
     {
         //Ensure At Least 2 Points Exist:
@@ -66,6 +75,8 @@ public class ParametricSpline2D : MonoBehaviour
         {
             QuadraticSplineCalc();
         }
+
+        RebuildArcLengthTable();
     }
 
     private void QuadraticSplineCalc()
@@ -489,6 +500,158 @@ public class ParametricSpline2D : MonoBehaviour
         float ddy = 6f * f.a_y * t + 2f * f.b_y;
 
         return new Vector2(ddx, ddy);
+    }
+
+    public void RebuildArcLengthTable()
+    {
+        //Reset Data:
+        _arcTValues.Clear();
+        _arcDistances.Clear();
+        TotalLength = 0f;
+        if (functions.Count == 0) return;
+
+        //Start at first node in spline:
+        float firstT = functions[0].tStart;
+        Vector2 previousPoint = Evaluate(firstT);
+
+        //Add the fors node to list, and given it is initial no distance is added:
+        _arcTValues.Add(firstT);
+        _arcDistances.Add(0f);
+
+
+        foreach (SplineSegment2D segment in functions)
+        {
+            //Break Each Spline Function into Segments:
+            for (int i = 1; i <= arcSamplesPerSegment; i++)
+            {
+                float fraction = i / (float)arcSamplesPerSegment;
+
+                //Linear time Interpolation for function:
+                float t = Mathf.Lerp
+                (
+                    segment.tStart,
+                    segment.tEnd,
+                    fraction
+                );
+
+                //Evaluate at Broken Segment:
+                Vector2 currentPoint = Evaluate(t);
+                TotalLength += Vector2.Distance(previousPoint, currentPoint);
+
+                //Store into the Lists:
+                _arcTValues.Add(t);                 //Current Time
+                _arcDistances.Add(TotalLength);     //Current Distance
+
+                //Set Current Segment as new initial position:
+                previousPoint = currentPoint;
+            }
+        }
+    }
+
+    //Evalauate Time, for the the Given Distance:
+    public float GetTAtDistance(float distance)
+    {
+        if (_arcTValues.Count == 0) return 0f;
+
+        //Ensure Distance is [0, Total Distance]:
+        distance = Mathf.Clamp(distance, 0f, TotalLength);
+
+        int low = 0;
+        int high = _arcDistances.Count - 1;
+
+        //While Distance between endpoints > 1:
+        while (high - low > 1)
+        {
+            int middle = (low + high) / 2;
+
+            //If the (Midpoint of Total Spline < given Distance) -> replace new low point:
+            if (_arcDistances[middle] < distance)
+            {
+                low = middle;
+            }
+            //Else the (Midpoint of Total Spline >= given Distance) -> replace new high point:
+            else
+            {
+                high = middle;
+            }
+        }
+
+        //Check distance difference between endpoints:
+        float distanceRange = _arcDistances[high] - _arcDistances[low];
+
+        //If (distance > epsilon) -> 
+        //Else (Distance =< epsilon) -> simply set to 0 to avoid running decimals
+        float interpolation = distanceRange > 0.000001f
+            ? (distance - _arcDistances[low]) / distanceRange
+            : 0f;
+
+        return Mathf.Lerp
+        (
+            _arcTValues[low],
+            _arcTValues[high],
+            interpolation
+        );
+    }
+    
+    //Evaluate Position, given a distance:
+    public Vector2 EvaluateAtDistance(float distance)
+    {
+        float t = GetTAtDistance(distance);
+
+        return Evaluate(t);
+    }
+
+    //Evaluate Velocity, given a distance:
+    public Vector2 GetTangentAtDistance(float distance)
+    {
+        float t = GetTAtDistance(distance);
+
+        Vector2 derivative = EvaluateFirstDerivative(t);
+
+        if (derivative.sqrMagnitude < 0.000001f) return Vector2.right;
+        return derivative.normalized;
+    }
+
+    //Evaluate Acceleration, given a distance:
+    public Vector2 GetCurvatureVectorAtDistance(float distance)
+    {
+        float t = GetTAtDistance(distance);
+
+        Vector2 firstDerivative = EvaluateFirstDerivative(t);
+        Vector2 secondDerivative = EvaluateSecondDerivative(t);
+
+        float derivativeMagnitudeSquared = firstDerivative.sqrMagnitude;
+        if (derivativeMagnitudeSquared < 0.000001f) return Vector2.zero;
+
+        Vector2 tangent = firstDerivative.normalized;
+
+        Vector2 perpendicularComponent = secondDerivative - tangent * Vector2.Dot(secondDerivative, tangent);
+
+        return perpendicularComponent / derivativeMagnitudeSquared;
+    }
+
+    //Find Nearest Sampled Point from list:
+    public float FindClosestDistance(Vector2 position)
+    {
+        if (_arcTValues.Count == 0) return 0f;
+
+        float closestDistance = 0f;
+        float closestSqrDistance = float.MaxValue;
+
+        for (int i = 0; i < _arcTValues.Count; i++)
+        {
+            Vector2 point = Evaluate(_arcTValues[i]);
+
+            float sqrDistance = (position - point).sqrMagnitude;
+
+            if (sqrDistance < closestSqrDistance)
+            {
+                closestSqrDistance = sqrDistance;
+                closestDistance = _arcDistances[i];
+            }
+        }
+
+        return closestDistance;
     }
 
     private void OnDrawGizmos()

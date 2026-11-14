@@ -118,6 +118,15 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
                     ""processors"": """",
                     ""interactions"": """",
                     ""initialStateCheck"": false
+                },
+                {
+                    ""name"": ""SplineRide"",
+                    ""type"": ""Button"",
+                    ""id"": ""cd4d1fec-c8df-4f1a-bd32-fa62887f5198"",
+                    ""expectedControlType"": """",
+                    ""processors"": """",
+                    ""interactions"": """",
+                    ""initialStateCheck"": false
                 }
             ],
             ""bindings"": [
@@ -197,6 +206,17 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
                     ""action"": ""Look"",
                     ""isComposite"": false,
                     ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""a0d537c4-ac3c-469d-a8cb-c76d1c47a98d"",
+                    ""path"": ""<Keyboard>/e"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": """",
+                    ""action"": ""SplineRide"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
                 }
             ]
         }
@@ -208,6 +228,7 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
         m_Player_Move = m_Player.FindAction("Move", throwIfNotFound: true);
         m_Player_Look = m_Player.FindAction("Look", throwIfNotFound: true);
         m_Player_Impulse = m_Player.FindAction("Impulse", throwIfNotFound: true);
+        m_Player_SplineRide = m_Player.FindAction("SplineRide", throwIfNotFound: true);
     }
 
     ~@Gameplay()
@@ -291,6 +312,7 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
     private readonly InputAction m_Player_Move;
     private readonly InputAction m_Player_Look;
     private readonly InputAction m_Player_Impulse;
+    private readonly InputAction m_Player_SplineRide;
     /// <summary>
     /// Provides access to input actions defined in input action map "Player".
     /// </summary>
@@ -314,6 +336,10 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
         /// Provides access to the underlying input action "Player/Impulse".
         /// </summary>
         public InputAction @Impulse => m_Wrapper.m_Player_Impulse;
+        /// <summary>
+        /// Provides access to the underlying input action "Player/SplineRide".
+        /// </summary>
+        public InputAction @SplineRide => m_Wrapper.m_Player_SplineRide;
         /// <summary>
         /// Provides access to the underlying input action map instance.
         /// </summary>
@@ -349,6 +375,9 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
             @Impulse.started += instance.OnImpulse;
             @Impulse.performed += instance.OnImpulse;
             @Impulse.canceled += instance.OnImpulse;
+            @SplineRide.started += instance.OnSplineRide;
+            @SplineRide.performed += instance.OnSplineRide;
+            @SplineRide.canceled += instance.OnSplineRide;
         }
 
         /// <summary>
@@ -369,6 +398,9 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
             @Impulse.started -= instance.OnImpulse;
             @Impulse.performed -= instance.OnImpulse;
             @Impulse.canceled -= instance.OnImpulse;
+            @SplineRide.started -= instance.OnSplineRide;
+            @SplineRide.performed -= instance.OnSplineRide;
+            @SplineRide.canceled -= instance.OnSplineRide;
         }
 
         /// <summary>
@@ -430,5 +462,12 @@ public partial class @Gameplay: IInputActionCollection2, IDisposable
         /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
         /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
         void OnImpulse(InputAction.CallbackContext context);
+        /// <summary>
+        /// Method invoked when associated input action "SplineRide" is either <see cref="UnityEngine.InputSystem.InputAction.started" />, <see cref="UnityEngine.InputSystem.InputAction.performed" /> or <see cref="UnityEngine.InputSystem.InputAction.canceled" />.
+        /// </summary>
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.started" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
+        void OnSplineRide(InputAction.CallbackContext context);
     }
 }

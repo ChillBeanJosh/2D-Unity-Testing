@@ -6,11 +6,12 @@ public struct CharacterInput2D
 {
     public Vector2 Move;
     public bool ImpulsePressed;
+    public bool SplineRidePressed;
 }
 
 public class PlayerMovement2D : MonoBehaviour
 {
-    [Header("Player Setup: ")]
+    [Header("Player Setup:")]
     [SerializeField] private bool isSideScroller;
     [Space]
     [SerializeField] private Transform root;
@@ -19,17 +20,16 @@ public class PlayerMovement2D : MonoBehaviour
     [SerializeField] private Transform wideZoomCameraTarget;
     [Space]
     [SerializeField] private Collider2D playerCollider;
-    [Space]
 
-
-    [Header("Global Physics State")]
+    [Header("-------------------------------------------------------")]
+    [Header("Global Physics State:")]
     private Vector2 previousPosition;
     private Vector2 currentPosition;
     private Vector2 currentVelocity;
     private Vector2 totalAcceleration;
 
-
-    [Header("Physics Settings")]
+    [Header("-------------------------------------------------------")]
+    [Header("Physics Settings:")]
     [SerializeField] private float mass = 80f;
     [Space]
     [SerializeField] private float gravity = 9.8f;
@@ -38,14 +38,25 @@ public class PlayerMovement2D : MonoBehaviour
     [Space]
     [SerializeField] private float meshRotationSpeed = 10f;
 
-
-    [Header("Impulse Settings (Jump / Dash): ")]
+    [Header("-------------------------------------------------------")]
+    [Header("Impulse Settings:")]
     [SerializeField] private float jumpStrength = 12f;
     [SerializeField] private float dashStrength = 15f;
+
+    [Header("-------------------------------------------------------")]
+    [Header("Spline Riding Settings:")]
+    [SerializeField] private float minSplineSpeed = 4f;
+    [SerializeField] private float splineDriveAcceleration = 8f;
     [Space]
+    private ParametricSpline2D _nearbySpline;
+    private ParametricSpline2D _activeSpline;
+    private bool _isSplineRiding;
+    private bool _requestedSplineRide;
+    private float _splineDistance;
+    private float _splineSpeed;
 
-
-    [Header("Collision Parameters: ")]
+    [Header("-------------------------------------------------------")]
+    [Header("Collision Parameters:")]
     [SerializeField] private LayerMask collisionLayers = Physics2D.DefaultRaycastLayers;
     [SerializeField] private int maxBounces = 5;
     [SerializeField] float skinWidth = 0.015f;
@@ -55,12 +66,12 @@ public class PlayerMovement2D : MonoBehaviour
     private bool isGrounded;
     private Vector2 groundNormal = Vector2.up;
 
-
+    [Header("-------------------------------------------------------")]
     [Header("Stuck Prevention Settings: ")]
     [SerializeField] private float maxStuckDuration = 0.2f;
     private float stuckTimer = 0f;
 
-
+    [Header("-------------------------------------------------------")]
     [Header("Arena Bounding Box (2D)")]
     [SerializeField] private bool useBoundingBox = true;
     [Space]
@@ -68,9 +79,8 @@ public class PlayerMovement2D : MonoBehaviour
     [SerializeField] private Vector2 boxMax = new Vector2(15f, 15f);
     [Space]
     [SerializeField] private float boxSpringConstant = 300f;
-    [Space]
 
-
+    [Header("-------------------------------------------------------")]
     [Header("Vector Visualization: ")]
     [SerializeField] private bool showDebugGizmos = true;
     [Space]
@@ -85,7 +95,6 @@ public class PlayerMovement2D : MonoBehaviour
     [Space]
 
  
-
     private Vector2 _requestedMovement;
     private bool _requestedImpulse;
 
@@ -104,6 +113,8 @@ public class PlayerMovement2D : MonoBehaviour
     private List<Vector2> _activeAccelerations = new List<Vector2>();
     private const float Epsilon = 0.0001f;
 
+    public float SplineDriveAcceleration { get => splineDriveAcceleration; set => splineDriveAcceleration = value; }
+
     void Awake()
     {
         if (playerCollider == null)
@@ -117,7 +128,8 @@ public class PlayerMovement2D : MonoBehaviour
         currentPosition = transform.position;
         previousPosition = currentPosition;
     }
- 
+
+    #region Update Read
     public void UpdateInput(CharacterInput2D input)
     {
         Vector2 moveInput = input.Move;
@@ -130,6 +142,7 @@ public class PlayerMovement2D : MonoBehaviour
 
         _requestedMovement = Vector2.ClampMagnitude(moveInput, 1f);
         _requestedImpulse |= input.ImpulsePressed;
+        _requestedSplineRide |= input.SplineRidePressed;
     }
 
     public void UpdateBody(float deltaTime)
@@ -166,7 +179,9 @@ public class PlayerMovement2D : MonoBehaviour
             }
         }
     }
+    #endregion
 
+    #region Physics Functions
     #region Force Control Functions
     //1.) Add Constant Acceleration to Accumulator:
     public void AddAcceleration(Vector2 acceleration)
@@ -194,6 +209,33 @@ public class PlayerMovement2D : MonoBehaviour
         _activeAccelerations.Clear();
         totalAcceleration = Vector2.zero;
 
+
+        //SPLINE RIDING PHYSICS:
+        if (_isSplineRiding && _activeSpline != null)
+        {
+            Vector2 tangent = _activeSpline.GetTangentAtDistance(_splineDistance);
+
+            //1.) Directional Input Acceleration:
+            //Input in the direction of travel increases speed.
+            //Input against the direction of travel reduces speed.
+
+            float driveInput = Mathf.Clamp(Vector2.Dot(_requestedMovement, tangent), -1f, 1f);
+            AddAcceleration(tangent * driveInput * SplineDriveAcceleration);
+
+
+            //2.) Curvature Acceleration:
+            //Calculate the normal acceleration required to follow the curve.
+
+            Vector2 curvature = _activeSpline.GetCurvatureVectorAtDistance(_splineDistance);
+            Vector2 splineAcceleration = curvature * (_splineSpeed * _splineSpeed);
+            AddAcceleration(splineAcceleration);
+
+            return;
+        }
+
+
+        //EXISTING PLAYER PHYSICS:
+
         //1.) Player Acceleration:
         if (_requestedMovement.sqrMagnitude > Epsilon)
         {
@@ -207,8 +249,9 @@ public class PlayerMovement2D : MonoBehaviour
             AddAcceleration(appliedAcceleration);
         }
 
-        //2.) Apply Drag/Friction Force: 
+        //2.) Apply Drag/Friction:
         Vector2 dragAcceleration = -currentVelocity * dragCoefficient;
+
         AddAcceleration(dragAcceleration);
 
         //3.) Apply Gravity:
@@ -216,49 +259,80 @@ public class PlayerMovement2D : MonoBehaviour
         {
             if (!isGrounded)
             {
-                //Apply Falling Force:
                 Vector2 gravityAcceleration = Vector2.down * gravity;
+
                 AddAcceleration(gravityAcceleration);
             }
             else
             {
-                //Remove downwards Force, to avoid Ground Clipping:
                 if (currentVelocity.y < 0f)
                 {
                     currentVelocity.y = 0f;
                 }
             }
-        }       
+        }
     }
 
     public void GatherIntrinsicPhysics()
     {
-        //Bounding Box Spring Force:
+        //1.) Process Spline Input:
+        if (_requestedSplineRide)
+        {
+            if (_isSplineRiding)
+            {
+                StopSplineRide();
+            }
+            else
+            {
+                TryStartSplineRide();
+            }
+
+            _requestedSplineRide = false;
+        }
+
+
+        //2.) Spline Riding Physics:
+        if (_isSplineRiding)
+        {
+            //Spacebar to Exit Spline Early:
+            if (_requestedImpulse)
+            {
+                StopSplineRide();
+
+                //Consume Input:
+                _requestedImpulse = false;
+            }
+
+            return;
+        }
+
+
+        //EXISTING PHYSICS:
+
         ApplyBoundingBoxForces();
 
-
-        //On Input [Spacebar]:
         if (_requestedImpulse)
         {
-            if(isSideScroller)
+            if (isSideScroller)
             {
-                //Jump Logic:
                 if (isGrounded)
                 {
                     currentVelocity.y = 0f;
+
                     AddImpulse(Vector2.up * jumpStrength);
 
                     isGrounded = false;
                 }
-            } 
+            }
             else
             {
-                //Dash Logic:
+                Vector2 dashDirection = _requestedMovement.sqrMagnitude > Epsilon
+                    ? _requestedMovement.normalized
+                    : currentVelocity.normalized;
 
-                //If moving use input logic, else use players current direction:
-                Vector2 dashDirection = _requestedMovement.sqrMagnitude > Epsilon ? _requestedMovement.normalized : currentVelocity.normalized;
                 AddImpulse(dashDirection * dashStrength);
             }
+
             _requestedImpulse = false;
         }
     }
@@ -266,6 +340,14 @@ public class PlayerMovement2D : MonoBehaviour
     public void ApplyMovement()
     {
         float dt = Time.fixedDeltaTime;
+
+        if (_isSplineRiding)
+        {
+            ApplySplineMovement(dt);
+            return;
+        }
+
+
         _collisionDebugHits.Clear();
 
         previousPosition = currentPosition;
@@ -315,6 +397,7 @@ public class PlayerMovement2D : MonoBehaviour
 
     #endregion
 
+    #region Collision Info
     private Vector2 CollideAndSlide(Vector2 velocity, Vector2 position, int depth, bool gravityPass, Vector2 initialVelocity)
     {
         if (depth > maxBounces) return Vector2.zero;
@@ -406,7 +489,218 @@ public class PlayerMovement2D : MonoBehaviour
             groundNormal = hit.normal;
         }
     }
+    #endregion
+    #endregion
 
+
+    #region Spline Functions
+    #region Spline Ride Trigger Assignment
+    //Assign Spline To Player When In Trigger:
+    public void RegisterNearbySpline(ParametricSpline2D spline)
+    {
+        _nearbySpline = spline;
+    }
+
+    //Unassign Spline From Player When Out Trigger:
+    public void UnregisterNearbySpline(ParametricSpline2D spline)
+    {
+        if (_nearbySpline == spline)
+        {
+            _nearbySpline = null;
+        }
+    }
+    #endregion
+
+    #region Spline Ride Entry/Exit
+    private void TryStartSplineRide()
+    {
+        //Ensure a Spline is Assigned:
+        if (_nearbySpline == null) return;
+
+        //Ensure spline has been calculated:
+        if (_nearbySpline.functions.Count == 0)
+        {
+            _nearbySpline.CalculateSpline();
+        }
+        //If already calculated, begin table of time[1] to distance[2]:
+        else
+        {
+            _nearbySpline.RebuildArcLengthTable();
+        }
+
+        //After calculating, if distance is short, exit:
+        if (_nearbySpline.TotalLength <= Epsilon) return;
+
+
+
+        //If not too short, assign as [ACTIVE]:
+        _activeSpline = _nearbySpline;
+
+        //Find the closest point to the player:
+        _splineDistance = _activeSpline.FindClosestDistance(currentPosition);
+
+        //Get the direction of travel:
+        Vector2 tangent = _activeSpline.GetTangentAtDistance(_splineDistance);
+
+        //Preserve Existing Forward Velocity, Enforce Minimum Speed:
+        _splineSpeed = Mathf.Max
+        (
+            minSplineSpeed,
+            Vector2.Dot(currentVelocity, tangent)
+        );
+
+        //Compute Position on Spline, given current distance:
+        currentPosition = _activeSpline.EvaluateAtDistance(_splineDistance);
+
+        //Store and Apply the Computed Position:
+        previousPosition = currentPosition;
+        transform.position = currentPosition;
+
+        //[MANUALLY] assign velocity/speed while on the spline:
+        currentVelocity = tangent * _splineSpeed;
+    
+        _isSplineRiding = true;
+        Debug.Log("[PlayerMovement2D] Started spline riding!");
+    }
+
+
+    private void StopSplineRide()
+    {
+        if (_isSplineRiding && _activeSpline != null)
+        {
+            Vector2 tangent = _activeSpline.GetTangentAtDistance(_splineDistance);
+
+            //Preserve the current direction and speed:
+            currentVelocity = tangent * _splineSpeed;
+        }
+
+        //Disable Checks:
+        _isSplineRiding = false;
+        _activeSpline = null;
+
+        Debug.Log("[PlayerMovement2D] Stopped spline riding!");
+    }
+    #endregion
+
+    #region Spline Physics
+    private void ApplySplineMovement(float dt)
+    {
+        _collisionDebugHits.Clear();
+        previousPosition = currentPosition;
+
+        //End When Spline Ride Exits:
+        if (_activeSpline == null)
+        {
+            StopSplineRide();
+            return;
+        }
+
+
+        //1.) Get Current Spline Direction:
+        Vector2 tangent = _activeSpline.GetTangentAtDistance(_splineDistance);
+
+
+        //2.) Update Spline Speed:
+        //Only acceleration in the tangent direction changes travel speed.
+
+        float tangentialAcceleration = Vector2.Dot(totalAcceleration, tangent);
+        _splineSpeed = Mathf.Max
+        (
+            minSplineSpeed,
+            _splineSpeed + tangentialAcceleration * dt
+        );
+
+
+        //3.) Calculate Next Spline Distance:
+        float oldDistance = _splineDistance;
+
+        float nextDistance = Mathf.Min
+        (
+            oldDistance + _splineSpeed * dt,
+            _activeSpline.TotalLength
+        );
+
+
+        //4.) Evaluate Next Position:
+        Vector2 targetPosition = _activeSpline.EvaluateAtDistance(nextDistance);
+        Vector2 desiredDisplacement = targetPosition - currentPosition;
+
+     
+        //5.) Resolve Movement Using Existing Collision System:
+        Vector2 resolvedDisplacement = Vector2.zero;
+        if (desiredDisplacement.sqrMagnitude > Epsilon * Epsilon)
+        {
+            resolvedDisplacement = CollideAndSlide
+            (
+                desiredDisplacement,
+                currentPosition,
+                0,
+                false,
+                currentVelocity
+            );
+        }
+
+
+        //6.) Determine How Much of the Path Was Traversed:
+        float distanceSquared = desiredDisplacement.sqrMagnitude;
+
+        float progressFraction = distanceSquared > Epsilon * Epsilon
+            ? Mathf.Clamp01(Vector2.Dot(resolvedDisplacement, desiredDisplacement) / distanceSquared)
+            : 1f;
+
+
+        //7.) Update Position and Spline Progress:
+        currentPosition += resolvedDisplacement;
+        transform.position = currentPosition;
+
+        _splineDistance = Mathf.Lerp
+        (
+            oldDistance,
+            nextDistance,
+            progressFraction
+        );
+
+
+        //8.) Update Velocity Direction:
+        Vector2 newTangent =_activeSpline.GetTangentAtDistance(_splineDistance);
+        currentVelocity = newTangent * _splineSpeed;
+
+
+        //9.) Handle Blocked Movement:
+        if (desiredDisplacement.sqrMagnitude > Epsilon * Epsilon && progressFraction <= 0.001f)
+        {
+            stuckTimer += dt;
+
+            if (stuckTimer >= maxStuckDuration)
+            {
+                Debug.LogWarning("[PlayerMovement2D] Spline movement blocked!");
+
+                StopSplineRide();
+                stuckTimer = 0f;
+            }
+        }
+        else
+        {
+            stuckTimer = 0f;
+        }
+
+
+        //10.) Stop When the End of the Spline Is Reached:
+        if (_isSplineRiding && _splineDistance >= _activeSpline.TotalLength - Epsilon)
+        {
+            StopSplineRide();
+        }
+
+
+        if (isSideScroller)
+        {
+            UpdateGroundedState();
+        }
+    }
+    #endregion
+    #endregion
+
+    #region Spring Box
     private void ApplyBoundingBoxForces()
     {
         if (!useBoundingBox) return;
@@ -440,6 +734,8 @@ public class PlayerMovement2D : MonoBehaviour
         //Apply Force to Player, using distance from bounding box edges to calculate spring force:
         if (boxForce.sqrMagnitude > Epsilon) AddForce(boxForce);
     }
+
+    #endregion
 
     #region Getter Functions
     public Transform GetCameraTarget() => cameraTarget;

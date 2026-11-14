@@ -55,7 +55,8 @@ public class PlayerInput2D : MonoBehaviour
         var characterInput = new CharacterInput2D
         {
             Move = input.Move.ReadValue<Vector2>(),
-            ImpulsePressed = input.Impulse.WasPressedThisFrame()
+            ImpulsePressed = input.Impulse.WasPressedThisFrame(),
+            SplineRidePressed = input.SplineRide.WasCompletedThisFrame()
         };
 
         //Update Movement Logic:
